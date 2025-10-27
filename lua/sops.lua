@@ -15,6 +15,9 @@ local DEFAULT_SUPPORTED_FILE_FORMATS = {
 ---@type table
 local SUPPORTED_FILE_FORMATS = vim.deepcopy(DEFAULT_SUPPORTED_FILE_FORMATS)
 
+-- Forward declarations
+local sops_encrypt_buffer
+
 ---@param bufnr number
 local function sops_decrypt_buffer(bufnr)
   local path = vim.api.nvim_buf_get_name(bufnr)
@@ -93,7 +96,7 @@ local function setup_buffer_autocmds(bufnr)
 end
 
 ---@param bufnr number
-local function sops_encrypt_buffer(bufnr)
+sops_encrypt_buffer = function(bufnr)
   local path = vim.api.nvim_buf_get_name(bufnr)
   local cwd = vim.fs.dirname(path)
 
