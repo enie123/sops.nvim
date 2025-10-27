@@ -60,6 +60,39 @@ local function sops_decrypt_buffer(bufnr)
 end
 
 ---@param bufnr number
+local function setup_buffer_autocmds(bufnr)
+  local au_group = vim.api.nvim_create_augroup("sops.nvim" .. bufnr, { clear = true })
+
+  vim.api.nvim_create_autocmd("BufDelete", {
+    buffer = bufnr,
+    group = au_group,
+    callback = function()
+      -- Clean up our autocmds
+      vim.api.nvim_clear_autocmds({
+        buffer = bufnr,
+        group = au_group,
+      })
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("BufWriteCmd", {
+    buffer = bufnr,
+    group = au_group,
+    callback = function()
+      -- Saving the file will always result in the SOPS-encrypted file changing, so there's no reason to save the
+      -- file if the decrypted contents have not changed. Saves on false positive changes.
+      if not vim.api.nvim_get_option_value("modified", { buf = bufnr }) then
+        vim.notify("Skipping sops encryption. File has not been modified", vim.log.levels.INFO)
+
+        return
+      end
+
+      sops_encrypt_buffer(bufnr)
+    end,
+  })
+end
+
+---@param bufnr number
 local function sops_encrypt_buffer(bufnr)
   local path = vim.api.nvim_buf_get_name(bufnr)
   local cwd = vim.fs.dirname(path)
@@ -115,6 +148,63 @@ local function sops_encrypt_buffer(bufnr)
   end)
 end
 
+---@param bufnr number
+local function sops_encrypt_file_inplace(bufnr)
+  -- Check if file is already encrypted
+  if util.is_sops_encrypted(bufnr) then
+    vim.notify("File is already SOPS-encrypted", vim.log.levels.WARN)
+    return
+  end
+
+  local path = vim.api.nvim_buf_get_name(bufnr)
+  if path == "" then
+    vim.notify("Cannot encrypt a buffer without a file path", vim.log.levels.WARN)
+    return
+  end
+
+  local cwd = vim.fs.dirname(path)
+  local filetype = vim.api.nvim_get_option_value("filetype", { buf = bufnr })
+
+  -- Validate filetype is supported
+  if filetype ~= "yaml" and filetype ~= "json" then
+    vim.notify("Unsupported filetype for SOPS encryption: " .. filetype, vim.log.levels.WARN)
+    return
+  end
+
+  -- Save the buffer first to ensure the file has the latest content
+  vim.api.nvim_buf_call(bufnr, function()
+    vim.cmd("write")
+  end)
+
+  vim.system(
+    { "sops", "--encrypt", "--input-type", filetype, "--output-type", filetype, "--in-place", path },
+    { cwd = cwd, text = true },
+    function(out)
+      vim.schedule(function()
+        if out.code ~= 0 then
+          vim.notify("Failed to encrypt file: " .. (out.stderr or ""), vim.log.levels.ERROR)
+          return
+        end
+
+        vim.notify("File encrypted successfully with SOPS", vim.log.levels.INFO)
+
+        -- Set up the buffer for SOPS operations
+        vim.api.nvim_set_option_value("buftype", "acwrite", { buf = bufnr })
+
+        -- Set up autocmds for future saves
+        setup_buffer_autocmds(bufnr)
+
+        -- Reload the buffer to show decrypted content
+        vim.api.nvim_buf_call(bufnr, function()
+          vim.cmd("edit!")
+        end)
+
+        -- The BufReadPost autocmd will handle decryption via the existing mechanism
+      end)
+    end
+  )
+end
+
 ---@param opts table
 M.setup = function(opts)
   opts = opts or {}
@@ -134,39 +224,37 @@ M.setup = function(opts)
         return
       end
 
-      local au_group = vim.api.nvim_create_augroup("sops.nvim" .. bufnr, { clear = true })
-
-      vim.api.nvim_create_autocmd("BufDelete", {
-        buffer = bufnr,
-        group = au_group,
-        callback = function()
-          -- Clean up our autocmds
-          vim.api.nvim_clear_autocmds({
-            buffer = bufnr,
-            group = au_group,
-          })
-        end,
-      })
-
-      vim.api.nvim_create_autocmd("BufWriteCmd", {
-        buffer = bufnr,
-        group = au_group,
-        callback = function()
-          -- Saving the file will always result in the SOPS-encrypted file changing, so there's no reason to save the
-          -- file if the decrypted contents have not changed. Saves on false positive changes.
-          if not vim.api.nvim_get_option_value("modified", { buf = bufnr }) then
-            vim.notify("Skipping sops encryption. File has not been modified", vim.log.levels.INFO)
-
-            return
-          end
-
-          sops_encrypt_buffer(bufnr)
-        end,
-      })
-
+      setup_buffer_autocmds(bufnr)
       sops_decrypt_buffer(bufnr)
     end,
   })
+
+  -- Create user command for encrypting files in-place
+  vim.api.nvim_create_user_command("SopsEncrypt", function()
+    local bufnr = vim.api.nvim_get_current_buf()
+    sops_encrypt_file_inplace(bufnr)
+  end, {
+    desc = "Encrypt the current file in-place using SOPS",
+  })
+
+  -- Set up optional keybinding if configured
+  if opts.keybindings and opts.keybindings.encrypt then
+    vim.keymap.set("n", opts.keybindings.encrypt, function()
+      local bufnr = vim.api.nvim_get_current_buf()
+      sops_encrypt_file_inplace(bufnr)
+    end, {
+      desc = "Encrypt current file with SOPS",
+      noremap = true,
+      silent = true,
+    })
+  end
+end
+
+---Encrypt the current buffer's file in-place using SOPS
+---@param bufnr number|nil Buffer number (defaults to current buffer)
+M.encrypt_file = function(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+  sops_encrypt_file_inplace(bufnr)
 end
 
 return M
