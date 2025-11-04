@@ -3,6 +3,18 @@ local util = require("util")
 ---@class SopsModule
 local M = {}
 
+-- Map Neovim filetypes to SOPS formats
+-- SOPS only understands specific formats like 'yaml', 'json', etc.
+-- But Neovim may use more specific filetypes like 'helm' or 'yaml.helm-values'
+---@param filetype string
+---@return string
+local function filetype_to_sops_format(filetype)
+  if filetype == "helm" or filetype == "yaml.helm-values" then
+    return "yaml"
+  end
+  return filetype
+end
+
 -- Default file formats supported by the plugin
 local DEFAULT_SUPPORTED_FILE_FORMATS = {
   "*.yaml",
@@ -24,9 +36,10 @@ local function sops_decrypt_buffer(bufnr)
   local cwd = vim.fs.dirname(path)
 
   local filetype = vim.api.nvim_get_option_value("filetype", { buf = bufnr })
+  local sops_format = filetype_to_sops_format(filetype)
 
   vim.system(
-    { "sops", "--decrypt", "--input-type", filetype, "--output-type", filetype, path },
+    { "sops", "--decrypt", "--input-type", sops_format, "--output-type", sops_format, path },
     { cwd = cwd, text = true },
     function(out)
       vim.schedule(function()
@@ -167,9 +180,10 @@ local function sops_encrypt_file_inplace(bufnr)
 
   local cwd = vim.fs.dirname(path)
   local filetype = vim.api.nvim_get_option_value("filetype", { buf = bufnr })
+  local sops_format = filetype_to_sops_format(filetype)
 
   -- Validate filetype is supported
-  if filetype ~= "yaml" and filetype ~= "json" then
+  if filetype ~= "yaml" and filetype ~= "json" and filetype ~= "helm" and filetype ~= "yaml.helm-values" then
     vim.notify("Unsupported filetype for SOPS encryption: " .. filetype, vim.log.levels.WARN)
     return
   end
@@ -180,7 +194,7 @@ local function sops_encrypt_file_inplace(bufnr)
   end)
 
   vim.system(
-    { "sops", "--encrypt", "--input-type", filetype, "--output-type", filetype, "--in-place", path },
+    { "sops", "--encrypt", "--input-type", sops_format, "--output-type", sops_format, "--in-place", path },
     { cwd = cwd, text = true },
     function(out)
       vim.schedule(function()

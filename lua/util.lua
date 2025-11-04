@@ -3,8 +3,8 @@ local M = {}
 local SOPS_MARKER_BYTES = {
   ["yaml"] = "mac: ENC[",
   ["yaml.helm-values"] = "mac: ENC[",
+  ["helm"] = "mac: ENC[",
   ["json"] = '"mac": "ENC[',
-  ["helm"] = '"mac": "ENC[',
 }
 
 M.is_sops_encrypted = function(bufnr)
